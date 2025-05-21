@@ -5,7 +5,9 @@ YOLO-specific modules
 Usage:
     $ python path/to/models/yolo.py --cfg yolov5s.yaml
 """
-
+import torch
+import torch.nn as nn
+import math 
 import argparse
 import contextlib
 import os
@@ -97,10 +99,13 @@ class BaseModel(nn.Module):
         return self._forward_once(x, profile, visualize)  # single-scale inference, train
 
     def _forward_once(self, x, profile=False, visualize=False):
-        # --- WaveBranch runs only to generate training features; its output is ignored for now
+        # --- WT-DBB feature taps -------------------------------------
         if self.training and hasattr(self, 'wave_branch'):
-            _ = self.wave_branch(x)        # detached later when we add contrastive loss
+            # Save detached copies for the loss; no grad needed here.
+            self.wave_feat = self.wave_branch(x).detach()
+            self.obj_feat  = x.detach()
         # --------------------------------------------------------------
+
         y, dt = [], []  # outputs
         for m in self.model:
             if m.f != -1:  # if not from previous layer
@@ -174,8 +179,12 @@ class DetectionModel(BaseModel):
         self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist
         self.names = [str(i) for i in range(self.yaml['nc'])]  # default names
         self.inplace = self.yaml.get('inplace', True)
-        first_channels = self.model[0].cv1.conv.out_channels   # output of Focus stem
-        self.wave_branch = WaveBranch(first_channels)
+        # works whether layer 0 is Conv or Focus
+        if hasattr(self.model[0], 'conv'):
+            first_channels = self.model[0].conv.out_channels
+        else:
+            first_channels = self.model[0].cv1.conv.out_channels
+            self.wave_branch = WaveBranch(first_channels)
         # Build strides, anchors
         m = self.model[-1]  # Detect()
         if isinstance(m, Detect):
