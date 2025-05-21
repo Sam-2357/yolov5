@@ -17,6 +17,7 @@ import pandas as pd
 import requests
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from PIL import Image
 from torch.cuda import amp
 
@@ -26,6 +27,25 @@ from utils.general import (LOGGER, ROOT, check_requirements, check_suffix, check
 from utils.plots import Annotator, colors, save_one_box
 from utils.torch_utils import copy_attr, smart_inference_mode, time_sync
 
+class WaveBranch(nn.Module):
+    """
+    Tiny branch that learns to absorb sea-wave texture.
+    Training-time only – we delete it before export.
+    """
+    def __init__(self, ch):
+        super().__init__()
+        # Fixed 3×3 high-pass kernel (depth-wise)
+        hp = torch.tensor([[[[-1, -1, -1],
+                             [-1,  8, -1],
+                             [-1, -1, -1]]]], dtype=torch.float32)
+        self.register_buffer('hp', hp.repeat(ch, 1, 1, 1))
+        # One dilated conv to extend receptive field a bit
+        self.conv = nn.Conv2d(ch, ch, 3, padding=2, dilation=2,
+                              groups=ch, bias=False)
+
+    def forward(self, x):
+        x = F.conv2d(x, self.hp, padding=1, groups=x.size(1))
+        return self.conv(x)
 
 def autopad(k, p=None):  # kernel, padding
     # Pad to 'same'

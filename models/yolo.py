@@ -13,6 +13,7 @@ import platform
 import sys
 from copy import deepcopy
 from pathlib import Path
+from models.common import WaveBranch
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # YOLOv5 root directory
@@ -96,6 +97,10 @@ class BaseModel(nn.Module):
         return self._forward_once(x, profile, visualize)  # single-scale inference, train
 
     def _forward_once(self, x, profile=False, visualize=False):
+        # --- WaveBranch runs only to generate training features; its output is ignored for now
+        if self.training and hasattr(self, 'wave_branch'):
+            _ = self.wave_branch(x)        # detached later when we add contrastive loss
+        # --------------------------------------------------------------
         y, dt = [], []  # outputs
         for m in self.model:
             if m.f != -1:  # if not from previous layer
@@ -169,7 +174,8 @@ class DetectionModel(BaseModel):
         self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist
         self.names = [str(i) for i in range(self.yaml['nc'])]  # default names
         self.inplace = self.yaml.get('inplace', True)
-
+        first_channels = self.model[0].cv1.conv.out_channels   # output of Focus stem
+        self.wave_branch = WaveBranch(first_channels)
         # Build strides, anchors
         m = self.model[-1]  # Detect()
         if isinstance(m, Detect):
