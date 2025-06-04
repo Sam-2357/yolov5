@@ -94,29 +94,38 @@ class Detect(nn.Module):
 
 
 class BaseModel(nn.Module):
-    # YOLOv5 base model
+    # YOLOv5 base model -------------------------------------------------
     def forward(self, x, profile=False, visualize=False):
-        return self._forward_once(x, profile, visualize)  # single-scale inference, train
+        return self._forward_once(x, profile, visualize)
 
+    # -------------------------------------------------------------------
     def _forward_once(self, x, profile=False, visualize=False):
-        # --- WT-DBB feature taps -------------------------------------
-        if self.training and hasattr(self, 'wave_branch'):
-            # Save detached copies for the loss; no grad needed here.
-            self.wave_feat = self.wave_branch(x).detach()
-            self.obj_feat  = x.detach()
-        # --------------------------------------------------------------
+        y, dt = [], []                                # saved outputs, profiling times
 
-        y, dt = [], []  # outputs
-        for m in self.model:
-            if m.f != -1:  # if not from previous layer
-                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
-            if profile:
-                self._profile_one_layer(m, x, dt)
-            x = m(x)  # run
-            y.append(x if m.i in self.save else None)  # save output
+        for m in self.model:                          # <- INSIDE the function
+            # pick input for this layer
+            if m.f != -1:
+                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]
+
+            x = m(x)  
+
+    # ---- WT-DBB tap ------------------------------------------
+            if (self.training and m.i == 0 and hasattr(self, 'wave_branch')
+                    and not hasattr(self, 'wave_feat')):
+                self.wave_feat = self.wave_branch(x).detach()
+                self.obj_feat  = x.detach()
+    # -----------------------------------------------------------
+
+ #           if profile:
+ #               self._profile_one_layer(m, x, dt)
+
+                                           # run the layer
+            y.append(x if m.i in self.save else None)
+
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
-        return x
+
+        return x                                      # <- AFTER the loop
 
     def _profile_one_layer(self, m, x, dt):
         c = m == self.model[-1]  # is final layer, copy input as inplace fix
@@ -184,7 +193,8 @@ class DetectionModel(BaseModel):
             first_channels = self.model[0].conv.out_channels
         else:
             first_channels = self.model[0].cv1.conv.out_channels
-            self.wave_branch = WaveBranch(first_channels)
+            
+        self.wave_branch = WaveBranch(first_channels)
         # Build strides, anchors
         m = self.model[-1]  # Detect()
         if isinstance(m, Detect):
